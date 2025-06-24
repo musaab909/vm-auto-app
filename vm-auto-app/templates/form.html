@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><title>Create VM</title></head>
+<body>
+<h2>Create New VM</h2>
+<form action="/create-vm" method="post">
+  <input name="vm_name" placeholder="VM Name" required><br>
+  <select name="vlan">
+    <option value="vlan10">VLAN 10</option>
+    <option value="vlan20">VLAN 20</option>
+  </select><br>
+  <select name="datastore">
+    <option value="datastore1">Datastore 1</option>
+    <option value="datastore2">Datastore 2</option>
+  </select><br>
+  <button type="submit">Deploy VM</button>
+</form>
+</body>
+</html>
