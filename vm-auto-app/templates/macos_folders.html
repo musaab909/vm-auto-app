@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head><title>macOS Documents Folders</title></head>
+<body>
+<h2>Folders in {{ path }}</h2>
+{% if folders %}
+<ul>
+  {% for folder in folders %}
+  <li>{{ folder }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No folders found in {{ path }}.</p>
+{% endif %}
+<a href="/">Back to Home</a>
+</body>
+</html>
