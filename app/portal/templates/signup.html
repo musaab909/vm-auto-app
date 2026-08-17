@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Create account — {{ brand }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <h1>Create your account</h1>
+  <form method="post" action="/signup">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Full name<input type="text" name="full_name" autocomplete="name"></label>
+    <label>Email<input type="email" name="email" required autocomplete="email"></label>
+    <label>Password
+      <input type="password" name="password" required minlength="10" autocomplete="new-password">
+      <small class="muted">At least 10 characters, mixing letters with digits or symbols.</small>
+    </label>
+    <button class="btn btn-block" type="submit">Create account</button>
+  </form>
+  <p class="muted">Already registered? <a href="/login">Sign in</a>.</p>
+</section>
+{% endblock %}

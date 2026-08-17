@@ -1,0 +1,39 @@
+{% extends "admin/base.html" %}
+{% block title %}Instances — {{ brand }}{% endblock %}
+{% block admin_content %}
+<h1>All instances</h1>
+<form method="get" class="inline-form">
+  <label>Filter by status
+    <select name="status" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == active_status %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Label</th><th>Status</th><th>IP</th><th>Hypervisor ref</th><th>Account</th><th>Drift</th><th></th></tr></thead>
+  <tbody>
+    {% for instance in instances %}
+    <tr>
+      <td>{{ instance.label }}<div class="muted small">{{ instance.hostname }}</div></td>
+      <td><span class="badge badge-{{ instance.status | status_tone }}">{{ instance.status }}</span></td>
+      <td><code>{{ instance.primary_ip or '—' }}</code></td>
+      <td><code class="small">{{ instance.hypervisor_ref or '—' }}</code></td>
+      <td class="small muted">{{ instance.account_id[:8] }}</td>
+      <td class="small">{{ instance.drift_detected_at.strftime('%Y-%m-%d %H:%M') if instance.drift_detected_at else '' }}</td>
+      <td>
+        <form method="post" action="/admin/instances/{{ instance.id }}/reconcile">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-sm" type="submit">Reconcile</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

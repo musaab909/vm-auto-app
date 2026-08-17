@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice.number }} — {{ brand }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ invoice.number }}</h1>
+    <span class="badge badge-{{ invoice.status | status_tone }}">{{ invoice.status }}</span>
+  </div>
+  <a class="btn btn-ghost" href="/billing">Back to billing</a>
+</div>
+
+<table class="table">
+  <thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th class="right">Amount</th></tr></thead>
+  <tbody>
+    {% for line in invoice.lines %}
+    <tr>
+      <td>{{ line.description }}</td>
+      <td>{{ line.quantity }}</td>
+      <td>{{ line.unit_price_cents | money(invoice.currency) }}</td>
+      <td class="right">{{ line.amount_cents | money(invoice.currency) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><th colspan="3" class="right">Subtotal</th><td class="right">{{ invoice.subtotal_cents | money(invoice.currency) }}</td></tr>
+    {% if invoice.tax_cents %}
+    <tr><th colspan="3" class="right">Tax</th><td class="right">{{ invoice.tax_cents | money(invoice.currency) }}</td></tr>
+    {% endif %}
+    <tr><th colspan="3" class="right">Total</th><td class="right"><strong>{{ invoice.total_cents | money(invoice.currency) }}</strong></td></tr>
+    {% if invoice.credit_applied_cents %}
+    <tr><th colspan="3" class="right">Credit applied</th><td class="right">−{{ invoice.credit_applied_cents | money(invoice.currency) }}</td></tr>
+    {% endif %}
+    <tr><th colspan="3" class="right">Amount due</th><td class="right"><strong>{{ invoice.amount_due_cents | money(invoice.currency) }}</strong></td></tr>
+  </tfoot>
+</table>
+{% endblock %}

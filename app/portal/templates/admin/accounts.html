@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% block title %}Accounts — {{ brand }}{% endblock %}
+{% block admin_content %}
+<h1>Accounts</h1>
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Name</th><th>Status</th><th>Balance</th><th>Servers</th><th>Created</th></tr></thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.account.name }}<div class="muted small">{{ row.account.billing_email }}</div></td>
+      <td><span class="badge badge-{{ row.account.status | status_tone }}">{{ row.account.status }}</span></td>
+      <td>{{ row.account.balance_cents | money(row.account.currency) }}</td>
+      <td>{{ row.instances }}</td>
+      <td class="muted small">{{ row.account.created_at.strftime('%Y-%m-%d') }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

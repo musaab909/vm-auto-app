@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Email verification — {{ brand }}{% endblock %}
+{% block content %}
+<section class="narrow">
+  <h1>{% if ok %}Email confirmed{% else %}Verification failed{% endif %}</h1>
+  <div class="alert {% if ok %}alert-ok{% else %}alert-bad{% endif %}">{{ message }}</div>
+  <a class="btn" href="/dashboard">Go to your dashboard</a>
+</section>
+{% endblock %}

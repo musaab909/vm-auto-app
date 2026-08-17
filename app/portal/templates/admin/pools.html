@@ -1,0 +1,45 @@
+{% extends "admin/base.html" %}
+{% block title %}IP pools — {{ brand }}{% endblock %}
+{% block admin_content %}
+<h1>IP pools</h1>
+
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Pool</th><th>Region</th><th>CIDR</th><th>Gateway</th><th>Total</th><th>Available</th><th>Assigned</th><th>Quarantined</th></tr></thead>
+  <tbody>
+    {% for p in pools %}
+    <tr>
+      <td>{{ p.pool.name }}</td>
+      <td class="small">{{ p.region.name if p.region else '—' }}</td>
+      <td><code>{{ p.pool.cidr }}</code></td>
+      <td><code class="small">{{ p.pool.gateway or '—' }}</code></td>
+      <td>{{ p.total }}</td>
+      <td>{{ p.available }}</td>
+      <td>{{ p.assigned }}</td>
+      <td>{{ p.quarantined }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Add a pool</h2>
+<form method="post" action="/admin/pools" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>Region
+    <select name="region_id" required>
+      {% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Name<input type="text" name="name" required placeholder="Frankfurt public /24"></label>
+  <label>CIDR<input type="text" name="cidr" required placeholder="203.0.113.0/24"></label>
+  <label>Gateway<input type="text" name="gateway" placeholder="203.0.113.1"></label>
+  <label>vSphere port group<input type="text" name="vsphere_network" placeholder="VM Network"></label>
+  <label>VLAN ID<input type="text" name="vlan_id" placeholder="100"></label>
+  <button class="btn" type="submit">Create pool and materialise addresses</button>
+</form>
+<p class="muted small">
+  Every usable host address is created as a row. The gateway is reserved
+  automatically and never handed out.
+</p>
+{% endblock %}
