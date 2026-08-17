@@ -63,13 +63,14 @@ app/
   schemas.py         pydantic request/response models
   api/v1/            auth · catalog · instances · billing · webhooks · admin
   portal/            Jinja2 + HTMX customer and staff UI
-  drivers/           HypervisorDriver protocol · MockDriver · VSphereDriver
+  drivers/           HypervisorDriver protocol · MockDriver · VSphereDriver ·
+                     preflight checks behind `hostplane doctor`
   billing/           PaymentGateway protocol · FakeGateway · invoicing ·
                      subscriptions · dunning
   services/          ipam · provisioning · quota · auth · audit · dispatch
   workers/           Celery app, tasks and beat schedule
 migrations/          Alembic
-tests/               139 tests against real PostgreSQL
+tests/               154 tests against real PostgreSQL
 ```
 
 ## Running it
@@ -190,7 +191,7 @@ one line in `billing/__init__.py`. Nothing in invoicing or dunning moves.
 ## Testing
 
 ```bash
-pytest -q                      # 139 tests
+pytest -q                      # 154 tests, plus 6 vCenter tests skipped by default
 ruff check . && mypy app
 ```
 
@@ -212,6 +213,10 @@ Notable coverage:
 - a worker retry after a lost commit charging the customer exactly once
 - a replayed webhook being ignored
 - cross-tenant access returning 404 on every instance route
+- the cloud-init metadata document parsing as YAML with a decodable `network`
+  key, and `guestinfo.vendordata` never being written
+- inventory lookups staying O(1): MoRef resolution builds no container view, and
+  finding a VM by instance id issues exactly one PropertyCollector call
 
 ## What is not verified here
 
@@ -221,7 +226,9 @@ Stated plainly, because it matters for anyone deploying this:
   written against the pyvmomi API and unit-tested for cloud-init payload
   generation, inventory-lookup failures and fault classification — but no real
   `CloneVM_Task`, guest cloud-init run, or WebMKS console ticket has been
-  executed. Validate against your own vSphere before trusting it in production;
+  executed. Run `hostplane doctor` and then the gated integration suite
+  (`pytest -m vcenter`, which creates real VMs and is skipped without explicit
+  opt-in) against your own environment before trusting it in production;
   [docs/vcenter-setup.md](docs/vcenter-setup.md) lists the exact checks.
 - **No live payment gateway.** Billing runs against `FakeGateway` by design.
 - **Email is persisted, not sent.** There is no SMTP transport, so verification
@@ -233,10 +240,19 @@ Stated plainly, because it matters for anyone deploying this:
 ```bash
 python -m app.cli seed                 # starter catalog, region and IP pool
 python -m app.cli create-admin --email … --password …
+python -m app.cli doctor               # can this deployment actually provision?
+python -m app.cli doctor --dry-run     # print the cloud-init docs an order would inject
 python -m app.cli capacity             # IP capacity per region and pool
 python -m app.cli run-billing          # run renewals and dunning now
 python -m app.cli reconcile            # re-sync against the hypervisor
 ```
+
+`doctor` is the first thing to run against a new vCenter. It checks connectivity
+and TLS, compares the service account's privileges against what the driver
+actually uses, resolves every inventory name your regions and pools reference,
+inspects each template, and checks datastore free space against your largest
+plan. Failures print the specific fix and the command exits non-zero, so it can
+gate a deploy. See [docs/vcenter-setup.md](docs/vcenter-setup.md).
 
 Scheduled work (Celery beat): renewals daily at 02:00 UTC, dunning at 03:00,
 reconcile every 15 minutes, IP quarantine sweep hourly, stuck-job requeue every

@@ -9,6 +9,7 @@ import argparse
 import sys
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from app.db import session_scope
 from app.models.catalog import OsImage, Plan, PlanRegion, Region
@@ -17,6 +18,7 @@ from app.models.identity import Account, AccountMember, User
 from app.models.network import IpPool
 from app.security import hash_password, utcnow
 from app.services import ipam, quota
+from app.services.errors import DriverError
 
 # A starter catalog modelled on typical VPS tiers. Prices are in cents.
 DEFAULT_PLANS: list[dict] = [
@@ -272,6 +274,172 @@ def cmd_capacity(args: argparse.Namespace) -> int:
     return 0
 
 
+_STATUS_GLYPH = {"pass": "PASS", "fail": "FAIL", "warn": "WARN", "skip": "SKIP"}
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Check that this deployment could actually provision a server.
+
+    Exits non-zero when any check fails, so it can gate a deploy.
+    """
+    from app.config import get_settings
+    from app.drivers.preflight import run_preflight
+
+    settings = get_settings()
+
+    if args.dry_run:
+        return _dry_run_cloud_init()
+
+    driver = None
+    if settings.driver == "vsphere":
+        from app.drivers.vsphere import VSphereDriver
+
+        try:
+            driver = VSphereDriver()
+        except DriverError as exc:
+            # A misconfiguration is a finding, not a crash.
+            print(f"{_STATUS_GLYPH['fail']}  vCenter configuration: {exc.message}")
+            print("      fix: set HOSTPLANE_VSPHERE_HOST, _USER and _PASSWORD.")
+            return 1
+
+    try:
+        with session_scope() as session:
+            report = run_preflight(session, driver)
+    except OperationalError as exc:
+        # The database is the one dependency doctor cannot check *through*, so
+        # report it as a finding rather than letting a driver traceback escape.
+        print(f"{_STATUS_GLYPH['fail']}  Database connection: {exc.orig or exc}")
+        print("      fix: check HOSTPLANE_DATABASE_URL and that PostgreSQL is running.")
+        return 1
+
+    width = max((len(c.name) for c in report.checks), default=20)
+    for check in report.checks:
+        print(f"{_STATUS_GLYPH[check.status.value]}  {check.name:<{width}}  {check.detail}")
+        if check.remedy:
+            print(f"      fix: {check.remedy}")
+
+    counts = report.counts()
+    print(
+        f"\n{counts['pass']} passed, {counts['fail']} failed, "
+        f"{counts['warn']} warnings, {counts['skip']} skipped"
+    )
+
+    if report.passed:
+        print(
+            "\nNo blocking problems found. This does not prove a guest boots or "
+            "gets network — order one server and check it before opening for business."
+        )
+        return 0
+
+    print(f"\n{len(report.failures)} check(s) must be fixed before provisioning will work.")
+    return 1
+
+
+def _dry_run_cloud_init() -> int:
+    """Print the cloud-init documents a real order would inject.
+
+    Builds them from the seeded catalog without contacting vCenter, so the exact
+    payload can be reviewed before any VM exists.
+    """
+    import base64
+
+    from app.drivers.base import InstanceSpec, NetworkSpec
+    from app.drivers.vsphere import build_metadata, build_userdata
+
+    with session_scope() as session:
+        plan = (
+            session.execute(select(Plan).where(Plan.is_active.is_(True)).order_by(Plan.sort_order))
+            .scalars()
+            .first()
+        )
+        image = (
+            session.execute(
+                select(OsImage).where(OsImage.is_active.is_(True)).order_by(OsImage.sort_order)
+            )
+            .scalars()
+            .first()
+        )
+        region = session.execute(select(Region).where(Region.is_active.is_(True))).scalars().first()
+
+        if not (plan and image and region):
+            print("Nothing to render: seed the catalog first (`hostplane seed`).")
+            return 1
+
+        pool = (
+            session.execute(select(IpPool).where(IpPool.region_id == region.id)).scalars().first()
+        )
+
+        spec = InstanceSpec(
+            name="dry-run-example",
+            hostname="web-01",
+            vcpu=plan.vcpu,
+            ram_mb=plan.ram_mb,
+            disk_gb=plan.disk_gb,
+            template=image.vsphere_template or image.slug,
+            network=NetworkSpec(
+                ip_address="203.0.113.10",
+                prefix_length=pool.prefix_length if pool else 24,
+                gateway=pool.gateway if pool else "203.0.113.1",
+                dns_servers=pool.dns_list if pool else ["1.1.1.1"],
+                network_name=(pool.vsphere_network if pool else None) or region.vsphere_network,
+            ),
+            datacenter=region.vsphere_datacenter,
+            cluster=region.vsphere_cluster,
+            resource_pool=region.vsphere_resource_pool,
+            datastore=region.vsphere_datastore,
+            folder=region.vsphere_folder,
+            root_password="<generated-at-order-time>",
+            ssh_keys=[],
+            default_username=image.default_username,
+            instance_id="00000000-0000-0000-0000-000000000000",
+            account_id="00000000-0000-0000-0000-000000000000",
+        )
+
+        print(f"Plan {plan.slug} · image {image.slug} · region {region.slug}\n")
+        print("=== placement ===")
+        for label, value in (
+            ("datacenter", spec.datacenter),
+            ("cluster", spec.cluster),
+            ("resource pool", spec.resource_pool),
+            ("datastore", spec.datastore),
+            ("folder", spec.folder),
+            ("template", spec.template),
+            ("port group", spec.network.network_name),
+        ):
+            print(f"  {label:<14} {value or '(default)'}")
+
+        metadata = build_metadata(spec)
+        print("\n=== guestinfo.metadata (decoded) ===")
+        print(metadata)
+
+        # The network document is nested and base64-encoded inside the metadata,
+        # so decode it too — that nesting is exactly where it used to go wrong.
+        for line in metadata.splitlines():
+            if line.startswith("network: "):
+                print("=== metadata.network (decoded) ===")
+                print(base64.b64decode(line.split(" ", 1)[1]).decode())
+                break
+
+        print("=== guestinfo.userdata (decoded) ===")
+        print(build_userdata(spec))
+
+        print("=== guestinfo keys that will be written ===")
+        for key in (
+            "guestinfo.metadata",
+            "guestinfo.metadata.encoding",
+            "guestinfo.userdata",
+            "guestinfo.userdata.encoding",
+            "guestinfo.hostplane.instance_id",
+            "guestinfo.hostplane.account_id",
+        ):
+            print(f"  {key}")
+        print(
+            "\nNo guestinfo.vendordata is written: cloud-init reads it as "
+            "cloud-config, so network config lives inside metadata instead."
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hostplane", description="HostPlane operations CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -293,6 +461,18 @@ def build_parser() -> argparse.ArgumentParser:
         func=cmd_reconcile
     )
     sub.add_parser("capacity", help="Show IP capacity per region").set_defaults(func=cmd_capacity)
+
+    doctor = sub.add_parser(
+        "doctor",
+        help="Check this deployment can actually provision (run before going live)",
+    )
+    doctor.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the cloud-init documents a real order would inject, without contacting vCenter",
+    )
+    doctor.set_defaults(func=cmd_doctor)
+
     return parser
 
 

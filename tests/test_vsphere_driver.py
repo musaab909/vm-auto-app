@@ -15,10 +15,12 @@ recovered through the console.
 from __future__ import annotations
 
 import base64
+import types
 
 import pytest
 
-from app.drivers.base import InstanceSpec, NetworkSpec
+from app.drivers import vsphere as vsphere_module
+from app.drivers.base import DriverInstance, InstanceSpec, NetworkSpec, PowerState
 from app.drivers.vsphere import (
     GUEST_KEY_ACCOUNT_ID,
     GUEST_KEY_INSTANCE_ID,
@@ -154,23 +156,83 @@ def test_userdata_sets_the_hostname():
 # --- guestinfo encoding -----------------------------------------------------
 
 
-def test_guest_extra_config_is_base64_and_declares_its_encoding(monkeypatch):
+def test_guest_extra_config_is_base64_and_declares_its_encoding():
     """cloud-init only decodes guestinfo when the *.encoding key says base64."""
     driver = VSphereDriver.__new__(VSphereDriver)  # no connection needed
-    spec = make_spec()
 
-    options = driver._guest_extra_config(spec)
-    values = {opt.key: opt.value for opt in options}
+    values = {opt.key: opt.value for opt in driver._guest_extra_config(make_spec())}
 
     assert values["guestinfo.metadata.encoding"] == "base64"
     assert values["guestinfo.userdata.encoding"] == "base64"
-    assert values["guestinfo.vendordata.encoding"] == "base64"
 
     decoded = base64.b64decode(values["guestinfo.userdata"]).decode()
     assert decoded.startswith("#cloud-config")
 
-    decoded_net = base64.b64decode(values["guestinfo.vendordata"]).decode()
-    assert "203.0.113.10/24" in decoded_net
+
+def test_exact_guestinfo_key_set_is_written():
+    """Pin the key set: an extra or missing key here changes guest behaviour.
+
+    `guestinfo.vendordata` must be absent in particular — see
+    `test_network_config_travels_inside_metadata`.
+    """
+    driver = VSphereDriver.__new__(VSphereDriver)
+
+    keys = {opt.key for opt in driver._guest_extra_config(make_spec())}
+
+    assert keys == {
+        "guestinfo.metadata",
+        "guestinfo.metadata.encoding",
+        "guestinfo.userdata",
+        "guestinfo.userdata.encoding",
+        GUEST_KEY_INSTANCE_ID,
+        GUEST_KEY_ACCOUNT_ID,
+    }
+
+
+def test_network_config_travels_inside_metadata():
+    """Regression: network config must be a `network` key within the metadata.
+
+    It used to be written to `guestinfo.vendordata`, which cloud-init's VMware
+    datasource parses as vendor-data (cloud-config) and discards — the guest then
+    boots with no network at all, reachable only via the console.
+    """
+    driver = VSphereDriver.__new__(VSphereDriver)
+
+    values = {opt.key: opt.value for opt in driver._guest_extra_config(make_spec())}
+
+    assert "guestinfo.vendordata" not in values
+    assert "guestinfo.vendordata.encoding" not in values
+
+    metadata = base64.b64decode(values["guestinfo.metadata"]).decode()
+    assert "network.encoding: base64" in metadata
+
+    network_line = next(line for line in metadata.splitlines() if line.startswith("network: "))
+    network = base64.b64decode(network_line.split(" ", 1)[1]).decode()
+
+    assert "version: 2" in network
+    assert "- 203.0.113.10/24" in network
+    assert "via: 203.0.113.1" in network
+
+
+def test_metadata_is_parseable_yaml_with_a_decodable_network():
+    """The metadata document must survive a real YAML parse.
+
+    Embedding the netplan document base64-encoded rather than inline is what
+    keeps this true — a raw multi-line YAML value would need indentation the
+    string builder does not apply.
+    """
+    yaml = pytest.importorskip("yaml")
+
+    parsed = yaml.safe_load(build_metadata(make_spec()))
+
+    assert parsed["local-hostname"] == "web-01"
+    assert parsed["instance-id"] == "inst-123"
+    assert parsed["network.encoding"] == "base64"
+
+    network = yaml.safe_load(base64.b64decode(parsed["network"]).decode())
+    assert network["version"] == 2
+    assert network["ethernets"]["id0"]["addresses"] == ["203.0.113.10/24"]
+    assert network["ethernets"]["id0"]["dhcp4"] is False
 
 
 def test_guest_extra_config_tags_the_vm_for_correlation():
@@ -260,3 +322,173 @@ def test_find_by_instance_id_is_used_for_idempotent_create(monkeypatch):
     # create_instance returns the adopted VM before touching any inventory lookup,
     # so no connection is required to prove the short-circuit.
     assert driver.create_instance(make_spec()) is sentinel
+
+
+# --- inventory lookup behaviour ---------------------------------------------
+#
+# These use a hand-built fake of the small slice of the vim/vmodl API the lookup
+# helpers touch. The point is not to re-test pyvmomi, it is to pin the *shape* of
+# the calls: the previous implementation walked every VM in the inventory to
+# resolve a MoRef and dereferenced `.config` per VM to find one by instance id.
+# Both are invisible on a lab and painful on a populated vCenter, and neither is
+# something a unit test would catch without asserting on call counts.
+
+
+class _FakeStub:
+    pass
+
+
+class _FakeVm:
+    def __init__(self, mo_id, extra_config=None, missing=False):
+        self._moId = mo_id
+        self._missing = missing
+        self._extra = extra_config or {}
+        self.config_reads = 0
+
+    @property
+    def name(self):
+        if self._missing:
+            raise _FakeManagedObjectNotFound()
+        return f"vm-name-{self._moId}"
+
+    @property
+    def config(self):
+        self.config_reads += 1
+        return type("Config", (), {"extraConfig": self._extra_options()})()
+
+    def _extra_options(self):
+        return [type("Opt", (), {"key": k, "value": v})() for k, v in self._extra.items()]
+
+
+class _FakeManagedObjectNotFound(Exception):
+    pass
+
+
+class _FakeMethodFault(Exception):
+    pass
+
+
+class _FakeContainerView:
+    def __init__(self, view):
+        self.view = view
+        self.destroyed = False
+
+    def Destroy(self):
+        self.destroyed = True
+
+
+class _FakePropertyCollector:
+    def __init__(self, vms):
+        self._vms = vms
+        self.retrieve_calls = 0
+
+    def RetrieveContents(self, filter_specs):
+        self.retrieve_calls += 1
+        results = []
+        for vm in self._vms:
+            prop = type("Prop", (), {"name": "config.extraConfig", "val": vm._extra_options()})()
+            results.append(type("Result", (), {"obj": vm, "propSet": [prop]})())
+        return results
+
+
+def _fake_vim_module(vm_class):
+    """A stand-in for the `vim` namespace, exposing only what the code touches."""
+    ns = types.SimpleNamespace()
+    ns.VirtualMachine = vm_class
+    ns.view = types.SimpleNamespace(ContainerView=object)
+    return ns
+
+
+def _fake_vmodl_module():
+    ns = types.SimpleNamespace()
+    ns.fault = types.SimpleNamespace(ManagedObjectNotFound=_FakeManagedObjectNotFound)
+    ns.MethodFault = _FakeMethodFault
+    ns.query = types.SimpleNamespace(
+        PropertyCollector=types.SimpleNamespace(
+            TraversalSpec=lambda **kw: kw,
+            ObjectSpec=lambda **kw: kw,
+            PropertySpec=lambda **kw: kw,
+            FilterSpec=lambda **kw: kw,
+        )
+    )
+    return ns
+
+
+def _driver_with_fake_session(monkeypatch, vms, vm_factory=None):
+    """A driver whose `connect()` returns a fake ServiceInstance over `vms`."""
+    collector = _FakePropertyCollector(vms)
+    container = _FakeContainerView(vms)
+
+    content = types.SimpleNamespace(
+        rootFolder=object(),
+        viewManager=types.SimpleNamespace(CreateContainerView=lambda *a, **k: container),
+        propertyCollector=collector,
+        searchIndex=types.SimpleNamespace(
+            FindByUuid=lambda **kw: next(
+                (v for v in vms if v._extra.get("uuid") == kw.get("uuid")), None
+            )
+        ),
+    )
+    si = types.SimpleNamespace(content=content, _stub=_FakeStub())
+
+    driver = VSphereDriver.__new__(VSphereDriver)
+    monkeypatch.setattr(driver, "connect", lambda: si, raising=False)
+    monkeypatch.setattr(vsphere_module, "vmodl", _fake_vmodl_module())
+    monkeypatch.setattr(
+        vsphere_module, "vim", _fake_vim_module(vm_factory or (lambda ref, stub: _FakeVm(ref)))
+    )
+    return driver, container, collector
+
+
+def test_moref_resolution_makes_no_container_view(monkeypatch):
+    """Resolving a MoRef must wrap it directly, not scan the inventory."""
+    vms = [_FakeVm(f"vm-{i}") for i in range(50)]
+    constructed = []
+
+    def factory(ref, stub):
+        constructed.append(ref)
+        return _FakeVm(ref)
+
+    driver, container, collector = _driver_with_fake_session(monkeypatch, vms, factory)
+
+    vm = driver._find_vm_by_ref("vm-42")
+
+    assert vm is not None
+    assert constructed == ["vm-42"], "the ref should be wrapped, not searched for"
+    assert container.destroyed is False, "no container view should have been built"
+    assert collector.retrieve_calls == 0
+
+
+def test_moref_resolution_returns_none_for_a_deleted_vm(monkeypatch):
+    """A stale ref must read as absent rather than raising."""
+    driver, _, _ = _driver_with_fake_session(
+        monkeypatch, [], vm_factory=lambda ref, stub: _FakeVm(ref, missing=True)
+    )
+
+    assert driver._find_vm_by_ref("vm-gone") is None
+
+
+def test_find_by_instance_id_uses_one_property_collector_call(monkeypatch):
+    """One bulk retrieval, not one round trip per VM."""
+    vms = [_FakeVm(f"vm-{i}", {GUEST_KEY_INSTANCE_ID: f"inst-{i}"}) for i in range(50)]
+    driver, container, collector = _driver_with_fake_session(monkeypatch, vms)
+    monkeypatch.setattr(
+        driver,
+        "_to_driver_instance",
+        lambda vm: DriverInstance(ref=vm._moId, power_state=PowerState.ON),
+    )
+
+    found = driver.find_by_instance_id("inst-7")
+
+    assert found is not None and found.ref == "vm-7"
+    assert collector.retrieve_calls == 1, "should be a single bulk retrieval"
+    assert all(vm.config_reads == 0 for vm in vms), "must not dereference .config per VM"
+    assert container.destroyed is True, "the container view must be cleaned up"
+
+
+def test_find_by_instance_id_returns_none_when_absent(monkeypatch):
+    vms = [_FakeVm(f"vm-{i}", {GUEST_KEY_INSTANCE_ID: f"inst-{i}"}) for i in range(5)]
+    driver, container, _ = _driver_with_fake_session(monkeypatch, vms)
+
+    assert driver.find_by_instance_id("inst-nope") is None
+    assert container.destroyed is True

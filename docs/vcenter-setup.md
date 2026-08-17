@@ -7,6 +7,30 @@ None of this was executed against a live vCenter while the driver was written �
 there was none reachable. Treat the checklist at the end as required work, not
 as a formality.
 
+## Start here: `hostplane doctor`
+
+Most of this page is automated. Configure the connection settings, then:
+
+```bash
+hostplane doctor
+```
+
+It checks connectivity and TLS, enumerates the service account's privileges
+against what the driver actually uses, resolves every inventory name your regions
+and pools reference, inspects each template, and compares datastore free space
+against your largest plan. Every failure prints the specific fix, and the command
+exits non-zero so it can gate a deploy.
+
+To see the exact cloud-init documents a real order would inject, without touching
+vCenter at all:
+
+```bash
+hostplane doctor --dry-run
+```
+
+Work through `doctor` until it is clean, then run the manual checklist at the end
+of this page — those are the things no preflight can prove.
+
 ## 1. Service account
 
 Create a dedicated vCenter user (do not reuse `administrator@vsphere.local`) and
@@ -91,8 +115,26 @@ Then convert the VM to a template and record its inventory name in the
 `os_images.vsphere_template` column (the seed CLI uses names like
 `tmpl-ubuntu-24.04`).
 
-Verify cloud-init version ≥ 21.3 — earlier releases do not read
-`guestinfo.vendordata` for network configuration.
+Verify cloud-init version ≥ 21.3 (`cloud-init --version`) — earlier releases
+lack the VMware datasource this depends on.
+
+### How the guest is configured
+
+Two guestinfo keys are written at clone time, both base64-encoded with a matching
+`.encoding` key:
+
+| Key | Contents |
+| --- | --- |
+| `guestinfo.metadata` | instance-id, hostname, **and the network configuration** under a `network` key |
+| `guestinfo.userdata` | cloud-config: password, SSH keys, hostname |
+
+Network configuration lives *inside the metadata document*, not in
+`guestinfo.vendordata`. The datasource reads vendordata as vendor-data
+(cloud-config), so a netplan document placed there is parsed and discarded, and
+the guest boots with no network. No vendordata key is written at all.
+
+`hostplane doctor --dry-run` prints both documents, fully decoded, so you can
+check them before creating anything.
 
 ## 4. Networking
 
@@ -131,11 +173,27 @@ python -m app.cli capacity   # confirm what is configured
 
 ## 6. Verification checklist
 
-Run these against your own environment. Each is something the automated tests
-cannot cover.
+Run these against your own environment, after `hostplane doctor` is clean. Each
+is something neither the preflight nor the automated tests can prove — they all
+require a guest to actually boot.
 
-- [ ] `python -c "from app.drivers.vsphere import VSphereDriver; VSphereDriver().connect()"`
-      connects with TLS verification on.
+If you have a scratch cluster, the gated integration suite automates the
+hypervisor-side half of this list:
+
+```bash
+HOSTPLANE_VSPHERE_ITEST_CONFIRM=1 \
+HOSTPLANE_VSPHERE_ITEST_TEMPLATE=tmpl-ubuntu-24.04 \
+HOSTPLANE_VSPHERE_ITEST_CLUSTER=Cluster-01 \
+HOSTPLANE_VSPHERE_ITEST_DATASTORE=vsanDatastore \
+HOSTPLANE_VSPHERE_ITEST_NETWORK='VM Network' \
+pytest -m vcenter -v
+```
+
+It creates and destroys real VMs named `hostplane-itest-*`.
+
+- [ ] `hostplane doctor` reports no failures.
+- [ ] `hostplane doctor --dry-run` shows a metadata document whose decoded
+      `network` key has the right address, gateway and DNS.
 - [ ] Order a server through the portal; it reaches `running` within a few
       minutes.
 - [ ] The cloned VM has the right vCPU, memory and disk size — the disk was
@@ -157,8 +215,21 @@ cannot cover.
 ## Troubleshooting
 
 **VM boots with no network.** cloud-init did not consume the guestinfo payload.
-Check `Change settings` privilege, cloud-init ≥ 21.3, the datasource config, and
-`vmware-rpctool "info-get guestinfo.vendordata"` inside the guest.
+Run `hostplane doctor` first — a missing `Change settings`
+(`VirtualMachine.Config.AdvancedConfig`) privilege is by far the most common
+cause, and it fails silently: the clone succeeds and the keys simply never land.
+
+Then check inside the guest:
+
+```bash
+vmware-rpctool "info-get guestinfo.metadata" | base64 -d   # should show a network: key
+cloud-init query --all | head                              # what the datasource saw
+journalctl -u cloud-init --no-pager | tail -50
+```
+
+If the metadata key is absent, it is the privilege. If it is present but the
+guest still has no address, it is the datasource config or the cloud-init
+version.
 
 **`Clone request rejected` immediately.** Usually a missing privilege or a name
 collision. The driver marks `InvalidArgument`, `NotFound`, `DuplicateName`,

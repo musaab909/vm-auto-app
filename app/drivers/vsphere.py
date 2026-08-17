@@ -86,11 +86,24 @@ def build_network_config(spec: InstanceSpec) -> str:
 
 
 def build_metadata(spec: InstanceSpec) -> str:
+    """cloud-init metadata, including the guest's network configuration.
+
+    Network config belongs *here*, under the `network` key, not in
+    `guestinfo.vendordata`. cloud-init's `DataSourceVMware` parses vendordata as
+    vendor-data (cloud-config) and would silently discard a netplan document
+    placed there — producing a VM that clones fine, boots, and has no network.
+
+    `network.encoding` is a sibling key telling the datasource how to decode the
+    `network` value; base64 avoids having to embed a multi-line YAML document
+    inside another YAML document.
+    """
     return (
         "\n".join(
             [
                 f"instance-id: {spec.instance_id or spec.name}",
                 f"local-hostname: {spec.hostname}",
+                f"network: {_b64(build_network_config(spec))}",
+                "network.encoding: base64",
             ]
         )
         + "\n"
@@ -249,18 +262,27 @@ class VSphereDriver:
         return obj
 
     def _find_vm_by_ref(self, ref: str) -> Any:
-        """Resolve a MoRef string such as "vm-1234" back to a managed object."""
-        content = self.content
-        container = content.viewManager.CreateContainerView(
-            content.rootFolder, [vim.VirtualMachine], True
-        )
+        """Resolve a MoRef string such as "vm-1234" back to a managed object.
+
+        A MoRef already *is* the server-side handle, so it can be wrapped
+        directly rather than searched for. The previous implementation built a
+        container view of every VM in the inventory and compared `_moId` — O(N)
+        round trips on every power action, for a lookup that is O(1).
+
+        The `name` read is a deliberate existence probe: wrapping a stale ref
+        succeeds locally and only fails when a property is touched, so this
+        converts "deleted out of band" into `None` rather than an exception
+        surfacing from an unrelated line later on.
+        """
+        si = self.connect()
+        vm = vim.VirtualMachine(ref, si._stub)
         try:
-            for vm in container.view:
-                if vm._moId == ref:
-                    return vm
-        finally:
-            container.Destroy()
-        return None
+            _ = vm.name
+        except vmodl.fault.ManagedObjectNotFound:
+            return None
+        except vmodl.MethodFault:
+            return None
+        return vm
 
     def _require_vm(self, ref: str) -> Any:
         vm = self._find_vm_by_ref(ref)
@@ -308,16 +330,23 @@ class VSphereDriver:
     # --- spec construction --------------------------------------------------
 
     def _guest_extra_config(self, spec: InstanceSpec) -> list[Any]:
-        """cloud-init NoCloud payload plus control-plane correlation keys."""
+        """cloud-init payload plus control-plane correlation keys.
+
+        Only metadata and userdata are set. Network configuration travels inside
+        the metadata document (see `build_metadata`); no `guestinfo.vendordata`
+        key is written, because the datasource would read it as cloud-config and
+        the network document would be dropped.
+
+        Writing these requires the `VirtualMachine.Config.AdvancedConfig`
+        privilege. Without it the clone still succeeds and the keys simply never
+        land, which presents to the customer as a server with no network — see
+        the `doctor` privilege check.
+        """
         options = [
             vim.option.OptionValue(key="guestinfo.metadata", value=_b64(build_metadata(spec))),
             vim.option.OptionValue(key="guestinfo.metadata.encoding", value="base64"),
             vim.option.OptionValue(key="guestinfo.userdata", value=_b64(build_userdata(spec))),
             vim.option.OptionValue(key="guestinfo.userdata.encoding", value="base64"),
-            vim.option.OptionValue(
-                key="guestinfo.vendordata", value=_b64(build_network_config(spec))
-            ),
-            vim.option.OptionValue(key="guestinfo.vendordata.encoding", value="base64"),
         ]
         if spec.instance_id:
             options.append(
@@ -327,7 +356,9 @@ class VSphereDriver:
             options.append(vim.option.OptionValue(key=GUEST_KEY_ACCOUNT_ID, value=spec.account_id))
         return options
 
-    def _nic_change_spec(self, template: Any, network_name: str | None) -> list[Any]:
+    def _nic_change_spec(
+        self, template: Any, network_name: str | None, datacenter: Any = None
+    ) -> list[Any]:
         """Re-point the template's first NIC at the target port group."""
         if not network_name:
             return []
@@ -345,7 +376,7 @@ class VSphereDriver:
                 f"Template '{template.name}' has no network adapter to configure", permanent=True
             )
 
-        network = self._find_object(vim.Network, network_name)
+        network = self._find_object(vim.Network, network_name, root=datacenter)
         if network is None:
             raise DriverError(f"Network '{network_name}' not found", permanent=True)
 
@@ -418,13 +449,16 @@ class VSphereDriver:
             if existing is not None:
                 return existing
 
-        template = self._require(vim.VirtualMachine, spec.template, "Template")
-
+        # Resolved first so every subsequent lookup can be scoped to it. Searching
+        # from the datacenter rather than rootFolder keeps each container view
+        # proportional to one site's inventory instead of the whole vCenter.
         datacenter = (
             self._require(vim.Datacenter, spec.datacenter, "Datacenter")
             if spec.datacenter
             else self.content.rootFolder.childEntity[0]
         )
+
+        template = self._require(vim.VirtualMachine, spec.template, "Template", root=datacenter)
 
         folder = (
             self._require(vim.Folder, spec.folder, "Folder", root=datacenter)
@@ -434,11 +468,17 @@ class VSphereDriver:
 
         relocate = vim.vm.RelocateSpec()
         if spec.datastore:
-            relocate.datastore = self._require(vim.Datastore, spec.datastore, "Datastore")
+            relocate.datastore = self._require(
+                vim.Datastore, spec.datastore, "Datastore", root=datacenter
+            )
         if spec.resource_pool:
-            relocate.pool = self._require(vim.ResourcePool, spec.resource_pool, "Resource pool")
+            relocate.pool = self._require(
+                vim.ResourcePool, spec.resource_pool, "Resource pool", root=datacenter
+            )
         elif spec.cluster:
-            cluster = self._require(vim.ClusterComputeResource, spec.cluster, "Cluster")
+            cluster = self._require(
+                vim.ClusterComputeResource, spec.cluster, "Cluster", root=datacenter
+            )
             relocate.pool = cluster.resourcePool
         else:
             raise DriverError(
@@ -450,7 +490,7 @@ class VSphereDriver:
         config.memoryMB = spec.ram_mb
         config.extraConfig = self._guest_extra_config(spec)
         config.deviceChange = self._nic_change_spec(
-            template, spec.network.network_name
+            template, spec.network.network_name, datacenter
         ) + self._disk_change_spec(template, spec.disk_gb)
 
         clone_spec = vim.vm.CloneSpec()
@@ -552,19 +592,65 @@ class VSphereDriver:
             url=f"wss://{ticket.host}:{ticket.port}/ticket/{ticket.ticket}",
         )
 
+    def find_by_uuid(self, instance_uuid: str) -> DriverInstance | None:
+        """Locate a VM by its vSphere instance UUID.
+
+        `SearchIndex` resolves this server-side in one call. instanceUuid rather
+        than BIOS uuid: the latter can legitimately repeat across VMs (it is
+        cloned along with everything else unless regenerated), while instanceUuid
+        is unique per VM within a vCenter.
+        """
+        si = self.connect()
+        vm = si.content.searchIndex.FindByUuid(
+            datacenter=None, uuid=instance_uuid, vmSearch=True, instanceUuid=True
+        )
+        return self._to_driver_instance(vm) if vm is not None else None
+
     def find_by_instance_id(self, instance_id: str) -> DriverInstance | None:
-        content = self.content
+        """Locate a VM by the control-plane instance id stamped into extraConfig.
+
+        This is the crash-recovery path: a VM was cloned but the worker died
+        before its ref reached the database, so there is no uuid to search by and
+        the only identifying mark is the guestinfo key written at clone time.
+
+        Retrieved through a single `PropertyCollector` call fetching just
+        `config.extraConfig` for every VM. The previous implementation walked a
+        container view and dereferenced `.config` per VM, which is one round trip
+        per VM in the inventory — and it runs on every provision as the
+        idempotency check.
+        """
+        si = self.connect()
+        content = si.content
+
         container = content.viewManager.CreateContainerView(
             content.rootFolder, [vim.VirtualMachine], True
         )
         try:
-            for vm in container.view:
-                config = getattr(vm, "config", None)
-                if config is None:
-                    continue
-                for option in getattr(config, "extraConfig", []) or []:
-                    if option.key == GUEST_KEY_INSTANCE_ID and option.value == instance_id:
-                        return self._to_driver_instance(vm)
+            traversal = vmodl.query.PropertyCollector.TraversalSpec(
+                name="viewToObject",
+                type=vim.view.ContainerView,
+                path="view",
+                skip=False,
+            )
+            object_spec = vmodl.query.PropertyCollector.ObjectSpec(
+                obj=container, skip=True, selectSet=[traversal]
+            )
+            property_spec = vmodl.query.PropertyCollector.PropertySpec(
+                type=vim.VirtualMachine, pathSet=["config.extraConfig"], all=False
+            )
+            filter_spec = vmodl.query.PropertyCollector.FilterSpec(
+                objectSet=[object_spec], propSet=[property_spec]
+            )
+
+            for result in content.propertyCollector.RetrieveContents([filter_spec]) or []:
+                for prop in result.propSet or []:
+                    if prop.name != "config.extraConfig":
+                        continue
+                    for option in prop.val or []:
+                        if option.key == GUEST_KEY_INSTANCE_ID and option.value == instance_id:
+                            # `result.obj` is the VM handle; re-read it fully only
+                            # now that we know which one we want.
+                            return self._to_driver_instance(result.obj)
         finally:
             container.Destroy()
         return None
@@ -593,7 +679,10 @@ class VSphereDriver:
         return DriverInstance(
             ref=vm._moId,
             power_state=_POWER_STATE_MAP.get(vm.runtime.powerState, PowerState.UNKNOWN),
-            uuid=getattr(config, "uuid", None) if config else None,
+            # instanceUuid, not the BIOS `uuid`: BIOS UUIDs are cloned along with
+            # the rest of the VM and can repeat, while instanceUuid is unique
+            # within the vCenter and is what SearchIndex matches on.
+            uuid=getattr(config, "instanceUuid", None) if config else None,
             name=vm.name,
             ip_addresses=ips,
             vcpu=getattr(hardware, "numCPU", None) if hardware else None,

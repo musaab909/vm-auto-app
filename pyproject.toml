@@ -72,4 +72,7 @@ disable_error_code = ["attr-defined", "assignment"]
 testpaths = ["tests"]
 pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
-markers = ["postgres: requires a live PostgreSQL database"]
+markers = [
+    "postgres: requires a live PostgreSQL database",
+    "vcenter: creates real VMs against a live vCenter; skipped unless credentials and HOSTPLANE_VSPHERE_ITEST_CONFIRM=1 are set",
+]
