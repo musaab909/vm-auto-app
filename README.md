@@ -70,7 +70,7 @@ app/
   services/          ipam · provisioning · quota · auth · audit · dispatch
   workers/           Celery app, tasks and beat schedule
 migrations/          Alembic
-tests/               154 tests against real PostgreSQL
+tests/               174 tests against real PostgreSQL
 ```
 
 ## Running it
@@ -137,6 +137,34 @@ hypervisor. The database is authoritative for *intent*; vCenter is authoritative
 for *fact*. It also adopts orphaned VMs — one created just before a worker died,
 before the reference was saved — which would otherwise run forever, unbilled.
 
+### Console
+
+`POST /instances/{id}/console` returns an opaque, signed, **single-use handle** —
+never the WebMKS ticket itself, which is a bearer credential for the VM's screen
+and would otherwise end up in logs and proxy caches. The handle is exchanged once
+at `GET /instances/console/{handle}`; a second exchange is refused, as is one
+past its 120-second expiry or one presented by a different user. Spent tickets
+are purged nightly.
+
+Two modes, set by `HOSTPLANE_CONSOLE_MODE`:
+
+- **`vcenter`** (default) — hands off to vCenter's own HTML5 console. Needs no
+  extra assets and is what works on day one; it does expose the vCenter hostname
+  to the customer.
+- **`webmks`** — serves a self-hosted viewer. VMware's `wmks.js` ships in the
+  vSphere HTML Console SDK and is **not redistributable**, so it cannot be
+  bundled here: supply it yourself and set `HOSTPLANE_CONSOLE_WMKS_PATH`. Without
+  it the page says so rather than rendering a broken canvas.
+
+### Clone concurrency
+
+vCenter throttles concurrent clones per datastore and host, answering further
+requests with `Resource in use`. `regions.max_concurrent_clones` (default 4, `0`
+for no limit) caps in-flight clones per region. At the limit a provision defers
+with a *retryable* error, so the worker's existing exponential backoff re-queues
+it — a burst of orders becomes a queue rather than a pile of failed jobs. The
+admin dashboard shows slots in use per region.
+
 ### Billing
 
 All money is integer minor units with an explicit currency. No floating point
@@ -191,7 +219,7 @@ one line in `billing/__init__.py`. Nothing in invoicing or dunning moves.
 ## Testing
 
 ```bash
-pytest -q                      # 154 tests, plus 6 vCenter tests skipped by default
+pytest -q                      # 174 tests, plus 6 vCenter tests skipped by default
 ruff check . && mypy app
 ```
 
@@ -213,6 +241,10 @@ Notable coverage:
 - a worker retry after a lost commit charging the customer exactly once
 - a replayed webhook being ignored
 - cross-tenant access returning 404 on every instance route
+- a console handle working exactly once, expiring, and being useless to another
+  user — and the API response never containing the ticket
+- a second clone deferring at the region limit without touching the driver, then
+  succeeding once a slot frees
 - the cloud-init metadata document parsing as YAML with a decodable `network`
   key, and `guestinfo.vendordata` never being written
 - inventory lookups staying O(1): MoRef resolution builds no container view, and

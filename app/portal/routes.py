@@ -21,6 +21,7 @@ from app.api.deps import (
 from app.billing import get_gateway
 from app.billing import subscriptions as subscription_service
 from app.config import get_settings
+from app.drivers import get_driver
 from app.models.billing import Invoice, PaymentMethod, Subscription
 from app.models.catalog import OsImage, Plan, Region
 from app.models.compute import Instance, Job
@@ -30,6 +31,7 @@ from app.portal.templating import issue_csrf_token, templates, verify_csrf
 from app.security import ssh_key_fingerprint
 from app.services import audit, provisioning
 from app.services import auth as auth_service
+from app.services import console as console_service
 from app.services.dispatch import enqueue_after_commit
 from app.services.errors import DomainError, NotFoundError, ValidationError
 
@@ -367,6 +369,46 @@ def instance_detail(
     if root_password:
         response.delete_cookie("hostplane_new_password", path="/")
     return response
+
+
+@router.get("/instances/{instance_id}/console", response_class=HTMLResponse)
+def instance_console(instance_id: str, request: Request, session: DbSession, user: CurrentUser):
+    """Open a console session for one instance.
+
+    Mints and immediately redeems a handle server-side: the browser never holds
+    the WebMKS ticket, and nothing usable survives in the URL bar or history.
+    """
+    instance = get_owned_instance(instance_id, session, user)
+
+    try:
+        handle, _record = console_service.mint(
+            session,
+            instance=instance,
+            user_id=user.id,
+            driver=get_driver(),
+            source_ip=client_ip(request),
+        )
+        details = console_service.redeem(session, handle, user_id=user.id)
+    except DomainError as exc:
+        return _render(
+            request,
+            "console.html",
+            user,
+            status_code=exc.status_code,
+            instance=instance,
+            error=exc.message,
+            details=None,
+        )
+
+    settings = get_settings()
+    return _render(
+        request,
+        "console.html",
+        user,
+        instance=instance,
+        details=details,
+        wmks_path=settings.console_wmks_path,
+    )
 
 
 @router.get("/instances/{instance_id}/status", response_class=HTMLResponse)

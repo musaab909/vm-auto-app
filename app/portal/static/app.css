@@ -192,3 +192,11 @@ legend { padding: 0 6px; font-size: 13px; color: var(--muted); text-transform: u
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); font-size: 14px;
 }
+
+.console-canvas {
+  width: 100%; min-height: 480px;
+  background: #000; border: 1px solid var(--border); border-radius: var(--radius);
+}
+.console-disconnected { opacity: .5; }
+/* Anchors ignore :disabled, so the disabled look is opt-in via a class. */
+.btn.disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }

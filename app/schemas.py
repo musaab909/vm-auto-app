@@ -191,10 +191,26 @@ class JobOut(ORMModel):
 
 
 class ConsoleOut(BaseModel):
-    url: str | None
+    """A minted console handle.
+
+    Carries no credential: the WebMKS ticket is only released by redeeming the
+    handle, which works exactly once.
+    """
+
+    handle: str
+    redeem_url: str
+    expires_at: datetime
+
+
+class ConsoleSessionOut(BaseModel):
+    """Connection details, released once per handle."""
+
+    instance_id: str
     host: str | None
     port: int | None
-    expires_at: datetime
+    url: str | None
+    mode: str
+    viewer_url: str | None
 
 
 # --- billing ----------------------------------------------------------------

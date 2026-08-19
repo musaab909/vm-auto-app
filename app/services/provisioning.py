@@ -12,7 +12,8 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from sqlalchemy import select
+import structlog
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.drivers import get_driver
@@ -30,6 +31,8 @@ from app.services.errors import (
     NotFoundError,
     ValidationError,
 )
+
+log = structlog.get_logger(__name__)
 
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
@@ -334,9 +337,71 @@ def build_spec(
     )
 
 
+def clone_slots_in_use(
+    session: Session, region_id: str, *, exclude_job_id: str | None = None
+) -> int:
+    """Provision jobs currently cloning into `region_id`.
+
+    Counts RUNNING provision jobs rather than tracking a separate counter: the
+    job rows are already the source of truth, and a counter would drift every
+    time a worker died between decrement and commit.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Job)
+        .join(Instance, Job.instance_id == Instance.id)
+        .where(
+            Job.type == JobType.PROVISION,
+            Job.status == JobStatus.RUNNING,
+            Instance.region_id == region_id,
+        )
+    )
+    if exclude_job_id is not None:
+        stmt = stmt.where(Job.id != exclude_job_id)
+    return int(session.execute(stmt).scalar_one())
+
+
+def acquire_clone_slot(session: Session, job: Job, instance: Instance) -> None:
+    """Refuse to start a clone when the region is already at its limit.
+
+    Raises a *retryable* `DriverError`, so the deferral rides the worker's
+    existing exponential backoff instead of needing its own scheduling. The
+    region row is locked first so two workers cannot both read "one slot left".
+    """
+    region = session.execute(
+        select(Region).where(Region.id == instance.region_id).with_for_update()
+    ).scalar_one_or_none()
+    if region is None:
+        raise DriverError("Instance references a missing region", permanent=True)
+
+    limit = region.max_concurrent_clones
+    if limit <= 0:
+        return  # 0 means "no limit", for operators who throttle elsewhere
+
+    # This job is already RUNNING by the time the executor is reached, so it must
+    # not count against its own limit.
+    in_use = clone_slots_in_use(session, region.id, exclude_job_id=job.id)
+    if in_use >= limit:
+        log.info(
+            "provisioning.clone_deferred",
+            region=region.slug,
+            in_use=in_use,
+            limit=limit,
+            job_id=job.id,
+        )
+        raise DriverError(
+            f"Region '{region.slug}' is at its clone limit ({in_use}/{limit}); "
+            "this order will start automatically when a slot frees up"
+        )
+
+
 def execute_provision(session: Session, job: Job, driver: HypervisorDriver | None = None) -> None:
     driver = driver or get_driver()
     instance = _job_instance(session, job)
+
+    # Checked before any hypervisor work, so a deferred order costs one query
+    # rather than a rejected clone task.
+    acquire_clone_slot(session, job, instance)
 
     spec = build_spec(
         session,

@@ -24,7 +24,7 @@ from app.models.enums import (
 from app.models.identity import Account, User
 from app.models.network import IpPool
 from app.portal.templating import issue_csrf_token, templates, verify_csrf
-from app.services import ipam
+from app.services import ipam, provisioning
 from app.services.errors import NotFoundError, ValidationError
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
@@ -95,6 +95,10 @@ def admin_home(request: Request, session: DbSession, user: StaffUser):
             {
                 "region": region,
                 "available": ipam.region_available_count(session, region.id),
+                # Saturation is invisible otherwise: deferred clones look like
+                # slow orders rather than a region at its limit.
+                "clones_in_use": provisioning.clone_slots_in_use(session, region.id),
+                "clone_limit": region.max_concurrent_clones,
                 "pools": [
                     {"pool": p, **ipam.pool_capacity(session, p.id)}
                     for p in session.execute(

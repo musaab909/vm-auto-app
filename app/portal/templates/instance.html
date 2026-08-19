@@ -51,6 +51,18 @@
       {% endfor %}
     </div>
 
+    <h2>Console</h2>
+    <a class="btn btn-sm btn-block {% if instance.status != 'running' %}disabled{% endif %}"
+       href="{% if instance.status == 'running' %}/instances/{{ instance.id }}/console{% else %}#{% endif %}"
+       target="_blank" rel="noopener noreferrer"
+       {% if instance.status != 'running' %}aria-disabled="true" tabindex="-1"{% endif %}>
+      Open console
+    </a>
+    <p class="small muted">
+      Direct screen access, for when the network is unreachable. Available while
+      the server is running.
+    </p>
+
     <h2>Resize</h2>
     <form method="post" action="/instances/{{ instance.id }}/action">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

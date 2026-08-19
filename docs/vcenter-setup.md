@@ -136,6 +136,23 @@ the guest boots with no network. No vendordata key is written at all.
 `hostplane doctor --dry-run` prints both documents, fully decoded, so you can
 check them before creating anything.
 
+### Console access
+
+`HOSTPLANE_CONSOLE_MODE` picks how the browser reaches a VM's screen:
+
+| Mode | Needs | Trade-off |
+| --- | --- | --- |
+| `vcenter` (default) | nothing extra | Works immediately; the customer sees the vCenter hostname |
+| `webmks` | VMware `wmks.js` | Fully self-hosted; the SDK is not redistributable so you must supply it |
+
+For `webmks`, download the vSphere HTML Console SDK from Broadcom, serve
+`wmks.js` from your own static host, and set `HOSTPLANE_CONSOLE_WMKS_PATH` to its
+URL. Without it the console page explains what is missing instead of rendering a
+blank canvas.
+
+Either way, `VirtualMachine.Interact.ConsoleInteract` must be granted — `doctor`
+checks for it.
+
 ## 4. Networking
 
 Create the port group your customers' VMs attach to, on a standard vSwitch or a
@@ -206,7 +223,15 @@ It creates and destroys real VMs named `hostplane-itest-*`.
 - [ ] Stop, start and reboot from the portal each take effect in vCenter.
 - [ ] Power a VM off directly in vCenter, wait for the reconciler (or run
       `python -m app.cli reconcile`), and confirm the portal shows `stopped`.
-- [ ] Open the console from the portal and confirm the WebMKS ticket connects.
+- [ ] Open the console from the portal and confirm it connects. With
+      `HOSTPLANE_CONSOLE_MODE=vcenter` this hands off to vCenter's own console;
+      with `webmks` it needs `wmks.js` supplied at
+      `HOSTPLANE_CONSOLE_WMKS_PATH` (see below).
+- [ ] Open the same console link a second time — it must be refused. Console
+      handles are single-use by design.
+- [ ] Order more servers at once than `regions.max_concurrent_clones` allows and
+      confirm the extras are *deferred and retried*, not failed. `/admin` shows
+      slots in use per region.
 - [ ] Delete the server; confirm the VM is gone from vCenter and its IP returns
       to the pool (`python -m app.cli capacity`).
 - [ ] Reinstall a server and confirm it comes back with a fresh disk and a new

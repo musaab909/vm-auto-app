@@ -32,6 +32,16 @@ class Region(UUIDPrimaryKey, Timestamped, Base):
     vsphere_folder: Mapped[str | None] = mapped_column(String(400))
     vsphere_network: Mapped[str | None] = mapped_column(String(200))
 
+    # vCenter throttles concurrent clones per datastore and host, answering
+    # further requests with "Resource in use". Capping in the control plane turns
+    # a burst of orders into a queue rather than a pile of failed jobs.
+    # server_default as well as default: the column is NOT NULL, so existing rows
+    # need a value at migration time, and the model must declare it or
+    # `alembic check` reports drift.
+    max_concurrent_clones: Mapped[int] = mapped_column(
+        Integer, default=4, server_default="4", nullable=False
+    )
+
     plans: Mapped[list[PlanRegion]] = relationship(
         back_populates="region", cascade="all, delete-orphan"
     )

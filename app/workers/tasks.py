@@ -229,6 +229,22 @@ def requeue_stuck_jobs() -> dict:
     return {"requeued": len(requeued)}
 
 
+@celery_app.task(name="hostplane.maintenance.purge_console_tickets")
+def purge_console_tickets() -> dict:
+    """Delete spent and expired console tickets.
+
+    Each row held a credential for a VM's screen. Once expired it is useless, so
+    keeping it is residue rather than history.
+    """
+    from app.services import console as console_service
+
+    with session_scope() as session:
+        removed = console_service.purge_expired(session)
+    if removed:
+        log.info("console.tickets_purged", count=removed)
+    return {"purged": removed}
+
+
 @celery_app.task(name="hostplane.maintenance.sync_instance")
 def sync_instance(instance_id: str) -> dict:
     """Reconcile one instance on demand."""

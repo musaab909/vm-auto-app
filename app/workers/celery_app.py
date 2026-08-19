@@ -55,6 +55,10 @@ celery_app.conf.update(
             "task": "hostplane.maintenance.sweep_quarantine",
             "schedule": crontab(hour="*/1", minute=5),
         },
+        "purge-console-tickets": {
+            "task": "hostplane.maintenance.purge_console_tickets",
+            "schedule": crontab(hour=4, minute=30),
+        },
         "requeue-stuck-jobs": {
             "task": "hostplane.maintenance.requeue_stuck_jobs",
             "schedule": crontab(minute="*/10"),

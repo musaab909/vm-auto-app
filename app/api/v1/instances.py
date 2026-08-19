@@ -7,8 +7,6 @@ before commit would let a worker pick up a job row that is not yet visible.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
@@ -24,10 +22,11 @@ from app.billing import subscriptions as subscription_service
 from app.drivers import get_driver
 from app.models.billing import Subscription
 from app.models.catalog import Plan
-from app.models.compute import ConsoleTicket, Instance, Job
+from app.models.compute import Instance, Job
 from app.models.enums import InstanceStatus, JobType, SubscriptionStatus
 from app.schemas import (
     ConsoleOut,
+    ConsoleSessionOut,
     InstanceActionRequest,
     InstanceCreate,
     InstanceCreated,
@@ -36,19 +35,15 @@ from app.schemas import (
     RebuildRequest,
     ResizeRequest,
 )
-from app.security import utcnow
 from app.services import audit, provisioning
+from app.services import console as console_service
 from app.services.dispatch import enqueue_after_commit
 from app.services.errors import (
-    DriverError,
-    InvalidStateError,
     NotFoundError,
     ValidationError,
 )
 
 router = APIRouter(prefix="/instances", tags=["instances"])
-
-CONSOLE_TICKET_TTL_SECONDS = 120
 
 
 @router.get("", response_model=list[InstanceOut])
@@ -267,39 +262,35 @@ def delete_instance(
 
 @router.post("/{instance_id}/console", response_model=ConsoleOut)
 def open_console(instance: OwnedInstance, request: Request, session: DbSession, user: CurrentUser):
-    if instance.status is not InstanceStatus.RUNNING:
-        raise InvalidStateError("The console is only available while the server is running")
-    if not instance.hypervisor_ref:
-        raise InvalidStateError("This server has no hypervisor reference yet")
+    """Mint a single-use console handle.
 
-    try:
-        console = get_driver().get_console(instance.hypervisor_ref)
-    except DriverError as exc:
-        raise InvalidStateError(f"Could not open a console session: {exc.message}") from exc
-
-    expires_at = utcnow() + timedelta(seconds=CONSOLE_TICKET_TTL_SECONDS)
-    # A WebMKS ticket is a bearer credential for the VM's screen and keyboard, so
-    # it is short-lived, single-use and audited rather than long-lived in a page.
-    session.add(
-        ConsoleTicket(
-            instance_id=instance.id,
-            issued_to_user_id=user.id,
-            ticket=console.ticket,
-            host=console.host,
-            port=console.port,
-            url=console.url,
-            created_at=utcnow(),
-            expires_at=expires_at,
-        )
-    )
-    audit.record(
+    The WebMKS ticket itself is deliberately not returned: it is a bearer
+    credential for the VM's screen, and a JSON body ends up in logs and proxy
+    caches. The handle is exchanged once at `GET /console/{handle}`.
+    """
+    handle, record = console_service.mint(
         session,
-        action="instance.console_opened",
-        actor_user_id=user.id,
-        account_id=instance.account_id,
-        target_type="instance",
-        target_id=instance.id,
+        instance=instance,
+        user_id=user.id,
+        driver=get_driver(),
         source_ip=client_ip(request),
     )
+    return ConsoleOut(
+        handle=handle,
+        redeem_url=f"/api/v1/instances/console/{handle}",
+        expires_at=record.expires_at,
+    )
 
-    return ConsoleOut(url=console.url, host=console.host, port=console.port, expires_at=expires_at)
+
+@router.get("/console/{handle}", response_model=ConsoleSessionOut)
+def redeem_console(handle: str, session: DbSession, user: CurrentUser):
+    """Exchange a handle for the connection details. Works exactly once."""
+    details = console_service.redeem(session, handle, user_id=user.id)
+    return ConsoleSessionOut(
+        instance_id=details.instance_id,
+        host=details.host,
+        port=details.port,
+        url=details.url,
+        mode=details.mode,
+        viewer_url=details.viewer_url,
+    )

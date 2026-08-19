@@ -17,7 +17,19 @@
 
 <h2>IP capacity</h2>
 {% for entry in regions %}
-<h3>{{ entry.region.name }} <span class="muted small">({{ entry.available }} allocatable)</span></h3>
+<h3>
+  {{ entry.region.name }}
+  <span class="muted small">
+    ({{ entry.available }} IPs allocatable ·
+    {{ entry.clones_in_use }}/{{ entry.clone_limit }} clone slots in use)
+  </span>
+</h3>
+{% if entry.clone_limit and entry.clones_in_use >= entry.clone_limit %}
+<div class="alert alert-warn small">
+  This region is at its clone limit. New orders are deferred and retried
+  automatically, not failed.
+</div>
+{% endif %}
 <div class="table-scroll">
 <table class="table">
   <thead><tr><th>Pool</th><th>CIDR</th><th>Total</th><th>Available</th><th>Assigned</th><th>Reserved</th><th>Quarantined</th></tr></thead>

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Console — {{ instance.label }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Console — {{ instance.label }}</h1>
+    <p class="muted">{{ instance.hostname }}</p>
+  </div>
+  <a class="btn btn-ghost" href="/instances/{{ instance.id }}">Back to server</a>
+</div>
+
+{% if error %}
+  <div class="alert alert-bad">{{ error }}</div>
+{% elif details.mode == 'vcenter' and details.viewer_url %}
+  {# vCenter's own HTML5 console. Opened in a new tab rather than an iframe:
+     vCenter sends X-Frame-Options, so framing it would silently render blank. #}
+  <div class="alert alert-ok">
+    <p>Your console session is ready. It is valid for one use and expires shortly.</p>
+    <a class="btn btn-lg" href="{{ details.viewer_url }}" target="_blank" rel="noopener noreferrer">
+      Open console
+    </a>
+  </div>
+  <p class="muted small">
+    The console opens on the virtualisation host. If it does not load, your
+    session may have expired — return to the server page and open it again.
+  </p>
+{% elif details.mode == 'webmks' %}
+  {% if wmks_path %}
+    <div id="console-canvas" class="console-canvas"
+         data-url="{{ details.url }}" data-ticket-host="{{ details.host }}"></div>
+    <script src="{{ wmks_path }}"></script>
+    <script src="/static/console.js" defer></script>
+  {% else %}
+    <div class="alert alert-warn">
+      <p>
+        The console is configured for self-hosted WebMKS, but no viewer library is
+        installed.
+      </p>
+      <p class="small">
+        VMware's <code>wmks.js</code> ships in the vSphere HTML Console SDK and is
+        not redistributable, so it cannot be bundled here. Download it from
+        Broadcom, serve it, and set <code>HOSTPLANE_CONSOLE_WMKS_PATH</code> to its
+        URL — or set <code>HOSTPLANE_CONSOLE_MODE=vcenter</code> to hand off to
+        vCenter's own console instead.
+      </p>
+    </div>
+  {% endif %}
+{% else %}
+  <div class="alert alert-warn">
+    No console endpoint is available for this server. Check
+    <code>HOSTPLANE_CONSOLE_MODE</code> and that vCenter is configured.
+  </div>
+{% endif %}
+{% endblock %}

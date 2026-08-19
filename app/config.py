@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     vsphere_ca_bundle: str | None = None
     vsphere_task_timeout_seconds: int = 1800
 
+    # --- console ---
+    # "vcenter" hands off to vCenter's own HTML5 console and needs no extra
+    # assets. "webmks" serves a self-hosted viewer, which requires VMware's
+    # wmks.js from the vSphere HTML Console SDK — it is not redistributable, so
+    # the operator supplies it at `console_wmks_path`.
+    console_mode: Literal["vcenter", "webmks"] = "vcenter"
+    console_wmks_path: str | None = None
+
     # --- IPAM ---
     ip_quarantine_hours: int = 24
 
