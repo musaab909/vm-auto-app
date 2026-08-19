@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+{% block title %}Operations — {{ brand }}{% endblock %}
+{% block admin_content %}
+<h1>Operations</h1>
+
+<div class="cards">
+  <div class="card stat"><span class="muted small">Accounts</span><strong class="stat-value">{{ stats.accounts }}</strong></div>
+  <div class="card stat"><span class="muted small">Active servers</span><strong class="stat-value">{{ stats.instances }}</strong></div>
+  <div class="card stat"><span class="muted small">Errored</span><strong class="stat-value">{{ stats.errored }}</strong></div>
+  <div class="card stat"><span class="muted small">Jobs in flight</span><strong class="stat-value">{{ stats.jobs_active }}</strong></div>
+  <div class="card stat"><span class="muted small">Failed jobs</span><strong class="stat-value">{{ stats.jobs_failed }}</strong></div>
+  <div class="card stat"><span class="muted small">Past due</span><strong class="stat-value">{{ stats.past_due }}</strong></div>
+  <div class="card stat"><span class="muted small">Suspended</span><strong class="stat-value">{{ stats.suspended }}</strong></div>
+  <div class="card stat"><span class="muted small">Collected</span><strong class="stat-value">{{ stats.paid_cents | money }}</strong></div>
+  <div class="card stat"><span class="muted small">Outstanding</span><strong class="stat-value">{{ stats.outstanding_cents | money }}</strong></div>
+</div>
+
+<h2>IP capacity</h2>
+{% for entry in regions %}
+<h3>
+  {{ entry.region.name }}
+  <span class="muted small">
+    ({{ entry.available }} IPs allocatable ·
+    {{ entry.clones_in_use }}/{{ entry.clone_limit }} clone slots in use)
+  </span>
+</h3>
+{% if entry.clone_limit and entry.clones_in_use >= entry.clone_limit %}
+<div class="alert alert-warn small">
+  This region is at its clone limit. New orders are deferred and retried
+  automatically, not failed.
+</div>
+{% endif %}
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Pool</th><th>CIDR</th><th>Total</th><th>Available</th><th>Assigned</th><th>Reserved</th><th>Quarantined</th></tr></thead>
+  <tbody>
+    {% for p in entry.pools %}
+    <tr>
+      <td>{{ p.pool.name }}</td><td><code>{{ p.pool.cidr }}</code></td>
+      <td>{{ p.total }}</td>
+      <td>{{ p.available }}</td>
+      <td>{{ p.assigned }}</td><td>{{ p.reserved }}</td><td>{{ p.quarantined }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No regions configured.</p>
+{% endfor %}
+
+<h2>Recent jobs</h2>
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Type</th><th>Status</th><th>Attempts</th><th>Created</th><th>Error</th></tr></thead>
+  <tbody>
+    {% for job in recent_jobs %}
+    <tr>
+      <td>{{ job.type }}</td>
+      <td><span class="badge badge-{{ job.status | status_tone }}">{{ job.status }}</span></td>
+      <td>{{ job.attempts }}</td>
+      <td class="muted small">{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td class="muted small">{{ job.error[:70] if job.error else '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

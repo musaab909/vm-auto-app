@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ brand }} — VPS hosting{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Servers in about a minute.</h1>
+  <p class="lede">Fixed-price VPS on enterprise VMware infrastructure. No metering, no surprises on the invoice.</p>
+  <a class="btn btn-lg" href="/signup">Create an account</a>
+</section>
+
+<section>
+  <h2>Plans</h2>
+  {% if plans %}
+  <div class="grid">
+    {% for plan in plans %}
+    <article class="card plan">
+      <h3>{{ plan.name }}</h3>
+      <p class="price">{{ plan.price_cents | money(plan.currency) }}<span class="per">/{{ plan.billing_period }}</span></p>
+      <ul class="specs">
+        <li><strong>{{ plan.vcpu }}</strong> vCPU</li>
+        <li><strong>{{ plan.ram_mb | megabytes }}</strong> RAM</li>
+        <li><strong>{{ plan.disk_gb }} GB</strong> NVMe</li>
+        <li><strong>{{ plan.bandwidth_tb }} TB</strong> traffic</li>
+      </ul>
+      <a class="btn btn-block" href="/signup">Deploy</a>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No plans have been published yet.</p>
+  {% endif %}
+</section>
+
+{% if regions %}
+<section>
+  <h2>Regions</h2>
+  <ul class="inline">
+    {% for region in regions %}<li class="pill">{{ region.name }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% block title %}Invoices — {{ brand }}{% endblock %}
+{% block admin_content %}
+<h1>Invoices</h1>
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Number</th><th>Status</th><th>Total</th><th>Due</th><th>Outstanding</th></tr></thead>
+  <tbody>
+    {% for invoice in invoices %}
+    <tr>
+      <td><code>{{ invoice.number }}</code></td>
+      <td><span class="badge badge-{{ invoice.status | status_tone }}">{{ invoice.status }}</span></td>
+      <td>{{ invoice.total_cents | money(invoice.currency) }}</td>
+      <td class="muted small">{{ invoice.due_at.strftime('%Y-%m-%d') if invoice.due_at else '—' }}</td>
+      <td>{{ invoice.amount_due_cents | money(invoice.currency) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,78 @@
+[project]
+name = "hostplane"
+version = "0.1.0"
+description = "VPS hosting control plane on VMware vSphere"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-multipart>=0.0.17",
+    "jinja2>=3.1",
+    "itsdangerous>=2.2",
+    "argon2-cffi>=23.1",
+    "celery[redis]>=5.4",
+    "redis>=5.2",
+    "pyvmomi>=8.0.3",
+    "email-validator>=2.2",
+    "structlog>=24.4",
+    "reportlab>=4.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-reportlab",
+]
+
+[project.scripts]
+hostplane = "app.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = ["B008", "RUF012"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+plugins = []
+
+# pyvmomi ships type stubs that declare most vim spec attributes as None and do
+# not re-export several documented vim.fault members. Assigning a real value to
+# a spec field, or catching a fault that exists at runtime, therefore trips mypy
+# on code that is correct. Scoped to the one module that touches those APIs.
+[[tool.mypy.overrides]]
+module = "app.drivers.vsphere"
+disable_error_code = ["attr-defined", "assignment"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "postgres: requires a live PostgreSQL database",
+    "vcenter: creates real VMs against a live vCenter; skipped unless credentials and HOSTPLANE_VSPHERE_ITEST_CONFIRM=1 are set",
+]

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ brand }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">{{ brand }}</a>
+  <nav>
+    {% if user %}
+      <a href="/dashboard">Servers</a>
+      <a href="/order">Deploy</a>
+      <a href="/billing">Billing</a>
+      <a href="/settings">Settings</a>
+      {% if user.is_staff %}<a href="/admin">Admin</a>{% endif %}
+      <a class="muted" href="/logout">Sign out</a>
+    {% else %}
+      <a href="/login">Sign in</a>
+      <a class="btn btn-sm" href="/signup">Create account</a>
+    {% endif %}
+  </nav>
+</header>
+
+<main>
+  {% if error %}<div class="alert alert-bad">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="alert alert-ok">{{ notice }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+
+<footer>
+  <span>{{ brand }} — VPS hosting control plane</span>
+  <a href="/api/docs">API docs</a>
+</footer>
+</body>
+</html>

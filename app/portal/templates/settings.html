@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Settings — {{ brand }}{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<h2>Account</h2>
+<table class="table kv">
+  <tr><th>Name</th><td>{{ account.name }}</td></tr>
+  <tr><th>Email</th><td>{{ user.email }}</td></tr>
+  <tr><th>Verified</th><td>{{ 'yes' if user.email_verified_at else 'no — check your inbox' }}</td></tr>
+  <tr><th>Currency</th><td>{{ account.currency }}</td></tr>
+</table>
+
+<h2>SSH keys</h2>
+{% if ssh_keys %}
+<table class="table">
+  <thead><tr><th>Name</th><th>Fingerprint</th><th></th></tr></thead>
+  <tbody>
+    {% for key in ssh_keys %}
+    <tr>
+      <td>{{ key.name }}</td>
+      <td><code class="small">{{ key.fingerprint }}</code></td>
+      <td>
+        <form method="post" action="/settings/ssh-keys/{{ key.id }}/delete">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No SSH keys yet. Without one, new servers use a generated root password.</p>
+{% endif %}
+
+<form method="post" action="/settings/ssh-keys">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>Key name<input type="text" name="name" required maxlength="100" placeholder="laptop"></label>
+  <label>Public key
+    <textarea name="public_key" rows="3" required placeholder="ssh-ed25519 AAAAC3Nza... user@host"></textarea>
+  </label>
+  <button class="btn" type="submit">Add SSH key</button>
+</form>
+{% endblock %}

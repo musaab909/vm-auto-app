@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Servers — {{ brand }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Your servers</h1>
+  <a class="btn" href="/order">Deploy a server</a>
+</div>
+
+{% if account.status != 'active' %}
+<div class="alert alert-warn">
+  This account is <strong>{{ account.status }}</strong>. Settle any outstanding invoices to restore full service.
+</div>
+{% endif %}
+
+{% if open_invoices %}
+<div class="alert alert-warn">
+  You have {{ open_invoices | length }} unpaid invoice{{ 's' if open_invoices | length != 1 }}.
+  <a href="/billing">Review billing</a>
+</div>
+{% endif %}
+
+{% if instances %}
+<table class="table">
+  <thead>
+    <tr><th>Label</th><th>Status</th><th>Spec</th><th>IP address</th><th>Region</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for instance in instances %}
+    <tr>
+      <td>
+        <a href="/instances/{{ instance.id }}"><strong>{{ instance.label }}</strong></a>
+        <div class="muted small">{{ instance.hostname }}</div>
+      </td>
+      <td><span class="badge badge-{{ instance.status | status_tone }}">{{ instance.status }}</span></td>
+      <td class="small">{{ instance.vcpu }} vCPU · {{ instance.ram_mb | megabytes }} · {{ instance.disk_gb }} GB</td>
+      <td><code>{{ instance.primary_ip or '—' }}</code></td>
+      <td class="small">{{ instance.region.name if instance.region else '—' }}</td>
+      <td><a class="btn btn-sm" href="/instances/{{ instance.id }}">Manage</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<section class="empty">
+  <h2>No servers yet</h2>
+  <p class="muted">Deploy your first VPS and it will be online in about a minute.</p>
+  <a class="btn" href="/order">Deploy a server</a>
+</section>
+{% endif %}
+{% endblock %}

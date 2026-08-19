@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Billing — {{ brand }}{% endblock %}
+{% block content %}
+<h1>Billing</h1>
+
+<div class="cards">
+  <div class="card stat">
+    <span class="muted small">Account balance</span>
+    <strong class="stat-value">{{ account.balance_cents | money(account.currency) }}</strong>
+    <span class="muted small">Positive means you hold credit.</span>
+  </div>
+  <div class="card stat">
+    <span class="muted small">Status</span>
+    <strong class="stat-value"><span class="badge badge-{{ account.status | status_tone }}">{{ account.status }}</span></strong>
+  </div>
+</div>
+
+<h2>Payment methods</h2>
+{% if methods %}
+<ul class="list">
+  {% for method in methods %}
+  <li>{{ method.display }} {% if method.is_default %}<span class="pill">default</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No payment method on file. Renewals will fail without one.</p>
+{% endif %}
+
+<form method="post" action="/billing/payment-methods" class="inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>Gateway token
+    <input type="text" name="token" required placeholder="tok_visa">
+    <small class="muted">
+      A token from the payment provider — raw card details never reach this server.
+      Test tokens: <code>tok_visa</code>, <code>tok_decline</code>, <code>tok_insufficient</code>.
+    </small>
+  </label>
+  <button class="btn" type="submit">Add payment method</button>
+</form>
+
+<h2>Subscriptions</h2>
+{% if subscriptions %}
+<table class="table">
+  <thead><tr><th>Status</th><th>Price</th><th>Current period ends</th><th>Renews</th></tr></thead>
+  <tbody>
+    {% for sub in subscriptions %}
+    <tr>
+      <td><span class="badge badge-{{ sub.status | status_tone }}">{{ sub.status }}</span></td>
+      <td>{{ sub.unit_price_cents | money(sub.currency) }} / {{ sub.billing_period }}</td>
+      <td>{{ sub.current_period_end.strftime('%Y-%m-%d') }}</td>
+      <td>{{ 'no — cancels' if sub.cancel_at_period_end else 'yes' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No subscriptions yet.</p>
+{% endif %}
+
+<h2>Invoices</h2>
+{% if invoices %}
+<table class="table">
+  <thead><tr><th>Number</th><th>Status</th><th>Total</th><th>Due</th><th></th></tr></thead>
+  <tbody>
+    {% for invoice in invoices %}
+    <tr>
+      <td><a href="/billing/invoices/{{ invoice.id }}"><code>{{ invoice.number }}</code></a></td>
+      <td><span class="badge badge-{{ invoice.status | status_tone }}">{{ invoice.status }}</span></td>
+      <td>{{ invoice.total_cents | money(invoice.currency) }}</td>
+      <td class="muted">{{ invoice.due_at.strftime('%Y-%m-%d') if invoice.due_at else '—' }}</td>
+      <td><a class="btn btn-sm" href="/billing/invoices/{{ invoice.id }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No invoices yet.</p>
+{% endif %}
+{% endblock %}

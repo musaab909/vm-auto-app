@@ -1,0 +1,67 @@
+{% extends "admin/base.html" %}
+{% block title %}Catalog — {{ brand }}{% endblock %}
+{% block admin_content %}
+<h1>Catalog</h1>
+
+<h2>Plans</h2>
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Name</th><th>Spec</th><th>Price</th><th>On sale</th><th></th></tr></thead>
+  <tbody>
+    {% for plan in plans %}
+    <tr>
+      <td>{{ plan.name }}<div class="muted small">{{ plan.slug }}</div></td>
+      <td class="small">{{ plan.vcpu }} vCPU · {{ plan.ram_mb | megabytes }} · {{ plan.disk_gb }} GB</td>
+      <td>{{ plan.price_cents | money(plan.currency) }}</td>
+      <td>{{ 'yes' if plan.is_active else 'no' }}</td>
+      <td>
+        <form method="post" action="/admin/catalog/plans/{{ plan.id }}/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn btn-sm" type="submit">{{ 'Withdraw' if plan.is_active else 'Publish' }}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted small">
+  Withdrawing a plan only stops new orders. Existing servers keep their
+  snapshotted spec and price.
+</p>
+
+<h2>Images</h2>
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Name</th><th>Template</th><th>Min disk</th><th>Active</th></tr></thead>
+  <tbody>
+    {% for image in images %}
+    <tr>
+      <td>{{ image.name }}</td>
+      <td><code class="small">{{ image.vsphere_template or '—' }}</code></td>
+      <td>{{ image.min_disk_gb }} GB</td>
+      <td>{{ 'yes' if image.is_active else 'no' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Regions</h2>
+<div class="table-scroll">
+<table class="table">
+  <thead><tr><th>Name</th><th>Datacenter</th><th>Cluster</th><th>Datastore</th><th>Network</th></tr></thead>
+  <tbody>
+    {% for region in regions %}
+    <tr>
+      <td>{{ region.name }}<div class="muted small">{{ region.slug }}</div></td>
+      <td class="small">{{ region.vsphere_datacenter or '—' }}</td>
+      <td class="small">{{ region.vsphere_cluster or '—' }}</td>
+      <td class="small">{{ region.vsphere_datastore or '—' }}</td>
+      <td class="small">{{ region.vsphere_network or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ instance.label }} — {{ brand }}{% endblock %}
+{% block content %}
+
+{% if root_password %}
+<div class="alert alert-ok credentials">
+  <h3>Your root password</h3>
+  <p>Copy it now — this is the only time it will be shown. We store only a hash.</p>
+  <code class="secret">{{ root_password }}</code>
+  <p class="small muted">Sign in with <code>ssh {{ instance.default_username }}@{{ instance.primary_ip or 'your-ip' }}</code></p>
+</div>
+{% endif %}
+
+<div class="page-head">
+  <div>
+    <h1>{{ instance.label }}</h1>
+    <p class="muted">{{ instance.hostname }}</p>
+  </div>
+  <a class="btn btn-ghost" href="/dashboard">All servers</a>
+</div>
+
+<div class="split">
+  <section>
+    {# The partial carries its own #status-card wrapper and polling attributes,
+       so it swaps itself out cleanly and stops polling once the instance settles. #}
+    {% include "partials/instance_status.html" %}
+
+    <h2>Specification</h2>
+    <table class="table kv">
+      <tr><th>Plan</th><td>{{ instance.plan.name if instance.plan else '—' }}</td></tr>
+      <tr><th>vCPU</th><td>{{ instance.vcpu }}</td></tr>
+      <tr><th>Memory</th><td>{{ instance.ram_mb | megabytes }}</td></tr>
+      <tr><th>Disk</th><td>{{ instance.disk_gb }} GB</td></tr>
+      <tr><th>Image</th><td>{{ instance.image.name if instance.image else '—' }}</td></tr>
+      <tr><th>Region</th><td>{{ instance.region.name if instance.region else '—' }}</td></tr>
+      <tr><th>IP address</th><td><code>{{ instance.primary_ip or 'pending' }}</code></td></tr>
+      <tr><th>Created</th><td>{{ instance.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</td></tr>
+    </table>
+  </section>
+
+  <aside>
+    <h2>Power</h2>
+    <div class="actions">
+      {% for action, caption in [('start', 'Start'), ('stop', 'Stop'), ('reboot', 'Reboot')] %}
+      <form method="post" action="/instances/{{ instance.id }}/action">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="{{ action }}">
+        <button class="btn btn-sm btn-block" type="submit"
+                {% if not instance.is_actionable %}disabled{% endif %}>{{ caption }}</button>
+      </form>
+      {% endfor %}
+    </div>
+
+    <h2>Console</h2>
+    <a class="btn btn-sm btn-block {% if instance.status != 'running' %}disabled{% endif %}"
+       href="{% if instance.status == 'running' %}/instances/{{ instance.id }}/console{% else %}#{% endif %}"
+       target="_blank" rel="noopener noreferrer"
+       {% if instance.status != 'running' %}aria-disabled="true" tabindex="-1"{% endif %}>
+      Open console
+    </a>
+    <p class="small muted">
+      Direct screen access, for when the network is unreachable. Available while
+      the server is running.
+    </p>
+
+    <h2>Resize</h2>
+    <form method="post" action="/instances/{{ instance.id }}/action">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="resize">
+      <select name="plan">
+        {% for plan in plans %}
+        {# Disks cannot shrink, so smaller plans are not offered at all. #}
+        {% if plan.disk_gb >= instance.disk_gb %}
+        <option value="{{ plan.slug }}">{{ plan.name }} — {{ plan.price_cents | money(plan.currency) }}</option>
+        {% endif %}
+        {% endfor %}
+      </select>
+      <p class="small muted">The server must be stopped before it can be resized.</p>
+      <button class="btn btn-sm btn-block" type="submit"
+              {% if instance.status != 'stopped' %}disabled{% endif %}>Resize</button>
+    </form>
+
+    <h2 class="danger-heading">Danger zone</h2>
+    <form method="post" action="/instances/{{ instance.id }}/action"
+          onsubmit="return confirm('Reinstalling erases every disk on this server. Continue?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="rebuild">
+      <input type="hidden" name="confirm" value="yes">
+      <select name="image">
+        <option value="">Reinstall the current image</option>
+        {% for image in images %}<option value="{{ image.slug }}">{{ image.name }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-sm btn-block btn-danger" type="submit">Reinstall</button>
+    </form>
+
+    <form method="post" action="/instances/{{ instance.id }}/action"
+          onsubmit="return confirm('Destroy this server and all its data permanently?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="delete">
+      <button class="btn btn-sm btn-block btn-danger" type="submit">Destroy server</button>
+    </form>
+  </aside>
+</div>
+{% endblock %}

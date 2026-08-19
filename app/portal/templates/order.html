@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Deploy a server — {{ brand }}{% endblock %}
+{% block content %}
+<h1>Deploy a server</h1>
+
+<form method="post" action="/order" class="order-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <fieldset>
+    <legend>Choose a plan</legend>
+    <div class="grid">
+      {% for plan in plans %}
+      <label class="card plan selectable">
+        <input type="radio" name="plan" value="{{ plan.slug }}" {% if loop.first %}checked{% endif %} required>
+        <h3>{{ plan.name }}</h3>
+        <p class="price">{{ plan.price_cents | money(plan.currency) }}<span class="per">/{{ plan.billing_period }}</span></p>
+        <ul class="specs">
+          <li>{{ plan.vcpu }} vCPU</li>
+          <li>{{ plan.ram_mb | megabytes }} RAM</li>
+          <li>{{ plan.disk_gb }} GB disk</li>
+          <li>{{ plan.bandwidth_tb }} TB traffic</li>
+        </ul>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Operating system</legend>
+    <select name="image" required>
+      {% for image in images %}
+      <option value="{{ image.slug }}">{{ image.name }}</option>
+      {% endfor %}
+    </select>
+  </fieldset>
+
+  <fieldset>
+    <legend>Region</legend>
+    <select name="region" required>
+      {% for region in regions %}
+      <option value="{{ region.slug }}">{{ region.name }}</option>
+      {% endfor %}
+    </select>
+  </fieldset>
+
+  <fieldset>
+    <legend>Identify your server</legend>
+    <label>Label<input type="text" name="label" required maxlength="100" placeholder="web-01"></label>
+    <label>Hostname <small class="muted">(optional — defaults to the label)</small>
+      <input type="text" name="hostname" maxlength="63" pattern="[a-zA-Z0-9\-]+" placeholder="web-01">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>SSH key</legend>
+    {% if ssh_keys %}
+    <select name="ssh_key_id">
+      <option value="">None — use the generated root password</option>
+      {% for key in ssh_keys %}
+      <option value="{{ key.id }}">{{ key.name }} ({{ key.fingerprint[:24] }}…)</option>
+      {% endfor %}
+    </select>
+    {% else %}
+    <p class="muted">
+      No SSH keys registered. A root password will be generated and shown once after deployment.
+      <a href="/settings">Add a key</a> for key-only access.
+    </p>
+    {% endif %}
+  </fieldset>
+
+  <button class="btn btn-lg" type="submit">Deploy server</button>
+</form>
+{% endblock %}
